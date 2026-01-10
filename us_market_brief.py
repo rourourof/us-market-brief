@@ -1,17 +1,29 @@
 import os
+import requests
+from datetime import datetime
 
-FROM_EMAIL = os.environ["GMAIL_ADDRESS"]
-APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
-TO_EMAIL = os.environ["TO_EMAIL"]
-print("DEBUG: script started")
+# Discord Webhook
+DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
-# （ここにニュース取得や本文作成のコードがある前提）
+def send_discord(message: str):
+    payload = {
+        "content": message
+    }
+    r = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    r.raise_for_status()
 
-print("DEBUG: about to send email")
-print("FROM =", FROM_EMAIL)
-print("TO =", TO_EMAIL)
+# ===== 市場ブリーフ本文 =====
 
-# メール送信処理（sendmail / send_message の直後）
-print("DEBUG: email send function finished")
+today = datetime.utcnow().strftime("%Y-%m-%d")
 
-print("DEBUG: script reached end")
+message = f"""
+📈 **米国株 市場ブリーフ（{today}）**
+
+【半導体セクター】
+・NVDA：前日のAI関連ニュースを受けた値動き
+・AMD：競合比較と市場反応
+・INTC：構造改革・政府支援の影響
+
+【前日のニュース → 株価への影響】
+・前日のマクロ／企業ニュースが
+  当日のNASDAQ・SOX指数にどう反映されたか
