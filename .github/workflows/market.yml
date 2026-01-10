@@ -2,21 +2,30 @@ name: US Market Brief
 
 on:
   schedule:
-    - cron: '0 21 * * 0-5'  # 日本 6:00
-    - cron: '0 9 * * 0-5'   # 日本 18:00
+    - cron: '0 21 * * 0-5'  # 日本時間 6:00（UTC 21:00）
+    - cron: '0 9 * * 0-5'   # 日本時間 18:00（UTC 9:00）
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install feedparser yfinance requests
-      - run: python us_market_brief.py
+
+      - name: Install dependencies
+        run: |
+          pip install feedparser yfinance requests
+
+      - name: Run market brief script
+        run: python us_market_brief.py
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-　　　　　　TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
