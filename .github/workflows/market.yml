@@ -1,13 +1,15 @@
 name: US Market Brief
 
 on:
-  schedule:
-    - cron: '0 21 * * 0-5'  # 日本時間 6:00（UTC 21:00）
-    - cron: '0 9 * * 0-5'   # 日本時間 18:00（UTC 9:00）
   workflow_dispatch:
+  schedule:
+    # 日本時間 6:00（UTC 21:00 前日）
+    - cron: '0 21 * * 0-5'
+    # 日本時間 18:00（UTC 9:00）
+    - cron: '0 9 * * 0-5'
 
 jobs:
-  run:
+  run-brief:
     runs-on: ubuntu-latest
 
     steps:
@@ -21,11 +23,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install feedparser yfinance requests
+          python -m pip install --upgrade pip
+          pip install requests
 
-      - name: Run market brief script
-        run: python us_market_brief.py
+      - name: Run python us_market_brief.py
         env:
-          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
