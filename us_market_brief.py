@@ -1,40 +1,26 @@
 import os
 import requests
-from datetime import datetime
 
-DISCORD_WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
+print("DEBUG: script started")
 
-def send_discord(message):
-    payload = {"content": message}
-    r = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    r.raise_for_status()
+WEBHOOK_URL = os.environ["DISCORD_WEBHOOK_URL"]
 
-today = datetime.utcnow().strftime("%Y-%m-%d")
+message = (
+    "【米国市場デイリーブリーフ】\n\n"
+    "■ 半導体セクター\n"
+    "・NVIDIA / AMD / Intel の動向まとめ\n"
+    "・前日のニュースが株価に与えた影響\n\n"
+    "■ 米国政治\n"
+    "・政権・議会・要人発言の要点\n"
+    "・市場への影響ポイント\n\n"
+    "※ テスト配信"
+)
 
-lines = [
-    f"US MARKET BRIEF ({today})",
-    "",
-    "SEMICONDUCTORS",
-    "- NVDA : AI and data center related moves",
-    "- AMD  : Competitive positioning",
-    "- INTC : Restructuring and policy impact",
-    "",
-    "NEWS IMPACT",
-    "- How yesterday's news affected today's prices",
-    "",
-    "MARKET REVIEW",
-    "- NASDAQ and S&P500 movement",
-    "- Intraday price action",
-    "",
-    "US POLITICS",
-    "- President / Fed / Congress statements",
-    "- Market implications",
-    "",
-    "This report is auto generated"
-]
+payload = {
+    "content": message
+}
 
-message = "\n".join(lines)
+response = requests.post(WEBHOOK_URL, json=payload)
 
-send_discord(message)
-
-print("Discord notification sent successfully")
+print("STATUS:", response.status_code)
+print("DEBUG: script finished")
