@@ -2,6 +2,7 @@ import os
 import sys
 import requests
 from datetime import datetime, timedelta
+from deep_translator import GoogleTranslator
 
 # =====================
 # 環境変数
@@ -10,82 +11,60 @@ WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
 if not WEBHOOK_URL or not NEWS_API_KEY:
-    print("ERROR: Environment variables not set")
-    sys.exit(1)
+    sys.exit("ERROR: Environment variables not set")
 
 # =====================
-# JST時刻
+# 時刻（JST）
 # =====================
 now_jst = datetime.utcnow() + timedelta(hours=9)
 
 # =====================
-# ニュース取得（前日分）
+# ニュース取得（本文あり）
 # =====================
-def fetch_market_news():
+def fetch_news():
     url = "https://newsapi.org/v2/everything"
     params = {
-        "q": "US stock market OR Federal Reserve OR inflation OR interest rate",
+        "q": "US stock market Federal Reserve inflation interest rate",
         "language": "en",
         "sortBy": "publishedAt",
-        "pageSize": 5,
+        "pageSize": 3,
         "apiKey": NEWS_API_KEY,
     }
+    return requests.get(url, params=params).json().get("articles", [])
 
-    r = requests.get(url, params=params)
-    data = r.json()
+translator = GoogleTranslator(source="en", target="ja")
 
-    news = []
-    for a in data.get("articles", []):
-        title = a.get("title", "")
-        source = a.get("source", {}).get("name", "")
-        news.append(f"・{title}（{source}）")
+news_blocks = []
 
-    return news
+for a in fetch_news():
+    title = translator.translate(a.get("title", ""))
+    description = translator.translate(a.get("description", ""))
 
-news_list = fetch_market_news()
-
-# =====================
-# ① 前日のニュース → 株価影響
-# =====================
-if news_list:
-    section_1 = (
-        "【材料（前日のニュース）】\n"
-        + "\n".join(news_list)
-        + "\n\n【市場の解釈】\n"
-        "・金利・インフレ関連のヘッドラインに市場は敏感\n"
-        "・FRBのスタンス次第でハイテク株が動きやすい\n\n"
+    block = (
+        f"● {title}\n"
+        f"【内容】{description}\n"
+        "【市場の受け止め】\n"
+        "・金利や金融政策への連想が意識されやすい材料\n"
+        "・ハイテク・成長株は反応しやすい\n"
         "【株価への影響】\n"
-        "・指数は方向感を探る展開\n"
-        "・NASDAQは金利観測に反応しやすい一日"
+        "・NASDAQ中心に方向感が出やすい展開\n"
     )
-else:
-    section_1 = (
-        "【材料】\n"
-        "前日は市場全体を大きく動かすニュースは確認されなかった。\n\n"
-        "【市場の解釈】\n"
-        "・材料難のため様子見姿勢が優勢\n\n"
-        "【株価への影響】\n"
-        "・指数は小動きにとどまった"
-    )
+    news_blocks.append(block)
 
 # =====================
-# メッセージ作成
+# メッセージ
 # =====================
 message = (
     "━━━━━━━━━━━━━━━━━━\n"
     "【米国株式市場ブリーフ】\n"
     "① 前日のニュースと株価への影響\n"
     "━━━━━━━━━━━━━━━━━━\n\n"
-    f"{section_1}\n\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}\n"
-    "※ 自動生成 / 投資助言ではありません"
+    + "\n".join(news_blocks) +
+    "\n━━━━━━━━━━━━━━━━━━\n"
+    f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}"
 )
 
 # =====================
 # Discord送信
 # =====================
-payload = {"content": message}
-res = requests.post(WEBHOOK_URL, json=payload)
-
-print("STATUS:", res.status_code)
+requests.post(WEBHOOK_URL, json={"content": message})
