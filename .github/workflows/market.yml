@@ -1,7 +1,10 @@
-name: Discord Notify Test
+name: US Market Discord Notify
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 21 * * 0-5"
+    - cron: "0 9 * * 0-5"
 
 jobs:
   notify:
