@@ -2,30 +2,22 @@ name: US Market Brief
 
 on:
   schedule:
-    - cron: "0 21 * * 0-4"  # 6:00 JST（月〜金）
-    - cron: "0 9 * * 0-4"   # 18:00 JST（月〜金）
+    # 月〜金のみ
+    - cron: "0 9 * * 1-5"   # 18:00 JST
+    - cron: "0 21 * * 1-5"  # 6:00 JST
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
-        run: |
-          pip install requests pytz yfinance pandas openai matplotlib
+      - run: pip install yfinance pandas
 
-      - name: Run
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
-        run: |
-          python us_market_brief.py
+      - name: Run market brief
+        run: python us_market_brief.py
