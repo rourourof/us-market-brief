@@ -14,79 +14,120 @@ if not WEBHOOK_URL or not NEWS_API_KEY:
     sys.exit("ERROR: Environment variables not set")
 
 # =====================
-# 時刻（UTC / JST）
+# 時刻
 # =====================
 now_utc = datetime.utcnow()
 now_jst = now_utc + timedelta(hours=9)
+weekday = now_jst.weekday()  # Mon=0
 
 # =====================
-# モード判定（UTC基準で確定）
+# モード判定（UTC基準）
 # =====================
-# 09:00 UTC → 18:00 JST → SCENARIO
-# 21:00 UTC → 06:00 JST → REVIEW
 if now_utc.hour == 9:
-    MODE = "SCENARIO"
+    MODE = "SCENARIO"   # 18:00 JST
 elif now_utc.hour == 21:
-    MODE = "REVIEW"
+    MODE = "REVIEW"     # 06:00 JST
 else:
-    MODE = "REVIEW"  # 手動実行用
-
-# =====================
-# ニュース取得（期間指定あり）
-# =====================
-def fetch_news():
-    url = "https://newsapi.org/v2/everything"
-
-    if MODE == "REVIEW":
-        from_date = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
-        to_date = now_utc.strftime("%Y-%m-%d")
-    else:
-        from_date = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
-        to_date = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
-
-    params = {
-        "q": "US stock market semiconductor NVDA AMD Federal Reserve politics",
-        "language": "en",
-        "sortBy": "publishedAt",
-        "from": from_date,
-        "to": to_date,
-        "pageSize": 5,
-        "apiKey": NEWS_API_KEY,
-    }
-
-    res = requests.get(url, params=params).json()
-    return res.get("articles", [])
+    MODE = "REVIEW"     # 手動実行用
 
 translator = GoogleTranslator(source="en", target="ja")
 
 # =====================
-# ニュース整形
+# NewsAPI 共通
 # =====================
-def build_news_section():
-    articles = fetch_news()
+def fetch_news(from_dt, to_dt, page_size=5):
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": "US stock market semiconductor NVDA AMD SOX Federal Reserve US politics",
+        "language": "en",
+        "sortBy": "publishedAt",
+        "from": from_dt,
+        "to": to_dt,
+        "pageSize": page_size,
+        "apiKey": NEWS_API_KEY,
+    }
+    res = requests.get(url, params=params).json()
+    return res.get("articles", [])
 
-    if not articles:
-        return "※ 対象期間内の新規ニュースは限定的\n"
+def format_article(a, mark="・"):
+    title = translator.translate(a.get("title", ""))
+    desc = translator.translate(a.get("description", ""))
+    published = a.get("publishedAt")
+    dt = datetime.fromisoformat(published.replace("Z", "")) + timedelta(hours=9)
+    date_str = dt.strftime("%Y/%m/%d %H:%M JST")
+    return f"{mark}【{date_str}】{title}\n{desc}\n"
 
-    blocks = []
+# =====================
+# ニュース構築
+# =====================
+def build_news_sections():
+    sections = []
 
-    for a in articles:
-        title = translator.translate(a.get("title", ""))
-        desc = translator.translate(a.get("description", ""))
+    # --- REVIEW（6:00） ---
+    if MODE == "REVIEW":
+        # 月曜は金〜日をカバー
+        days_back = 3 if weekday == 0 else 1
 
-        published = a.get("publishedAt")
-        dt = datetime.fromisoformat(published.replace("Z", "")) + timedelta(hours=9)
-        date_str = dt.strftime("%Y/%m/%d %H:%M JST")
+        # ① 前日の影響（★判定対象）
+        from_dt = (now_utc - timedelta(days=days_back)).strftime("%Y-%m-%d")
+        to_dt = now_utc.strftime("%Y-%m-%d")
+        impact_news = fetch_news(from_dt, to_dt, page_size=5)
 
-        mark = "★" if MODE == "REVIEW" else "・"
+        impact_block = "【ニュース｜前日の影響評価】\n"
+        if impact_news:
+            for a in impact_news:
+                impact_block += format_article(a, mark="★")
+                impact_block += "▶ 株価・出来高・重要ラインとの反応を基に影響度を判定\n\n"
+        else:
+            impact_block += "※ 対象期間内で株価に影響したニュースは限定的\n\n"
 
-        block = (
-            f"{mark}【{date_str}】{title}\n"
-            f"{desc}\n"
-        )
-        blocks.append(block)
+        sections.append(impact_block)
 
-    return "\n".join(blocks)
+        # ② 最新ニュース（速報・★なし）
+        from_latest = (now_utc - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
+        latest_news = fetch_news(from_latest, now_utc.strftime("%Y-%m-%dT%H:%M:%S"), page_size=3)
+
+        latest_block = "【ニュース｜最新（速報）】\n"
+        if latest_news:
+            for a in latest_news:
+                latest_block += format_article(a, mark="・")
+                latest_block += "▶ 市場反応はまだ未確認\n\n"
+        else:
+            latest_block += "※ 目立った速報ニュースなし\n\n"
+
+        sections.append(latest_block)
+
+        # ③ トレンド継続要因（過去1週間）
+        from_week = (now_utc - timedelta(days=7)).strftime("%Y-%m-%d")
+        trend_news = fetch_news(from_week, now_utc.strftime("%Y-%m-%d"), page_size=2)
+
+        trend_block = "【トレンドを形成している大きな材料（過去1週間）】\n"
+        if trend_news:
+            for a in trend_news:
+                trend_block += format_article(a, mark="◆")
+                trend_block += "▶ 中期トレンドに継続的に影響している可能性\n\n"
+        else:
+            trend_block += "※ 現在のトレンドはテクニカル主導\n\n"
+
+        sections.append(trend_block)
+
+    # --- SCENARIO（18:00） ---
+    else:
+        from_dt = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        to_dt = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
+        scenario_news = fetch_news(from_dt, to_dt, page_size=5)
+
+        block = "【ニュース｜本日の材料】\n"
+        if scenario_news:
+            for a in scenario_news:
+                block += format_article(a, mark="・")
+                block += "▶ 出来高を伴えば本日の主因になる可能性\n\n"
+        else:
+            block += "※ 新規材料は限定的\n\n"
+
+        sections.append(block)
+
+    return "\n".join(sections)
 
 # =====================
 # テクニカル文章
@@ -97,26 +138,28 @@ def technical_section():
             "【テクニカル状況】\n"
             "・NASDAQは20EMA上を維持\n"
             "・高値圏での持ち合い\n"
-            "・出来高は低下し材料待ち\n\n"
+            "・出来高は低下傾向\n\n"
             "【半導体】\n"
-            "・SOX指数はNASDAQより強含み\n"
-            "・NVDAは押し目形成\n\n"
-            "【想定シナリオ】\n"
-            "・材料＋出来高 → 上放れ\n"
-            "・反応薄 → 調整継続\n"
+            "・SOX指数はNASDAQより相対的に強い\n"
+            "・NVDAは押し目形成、AMDはレンジ上限試し\n\n"
+            "【本日のシナリオ】\n"
+            "・材料＋出来高 → 上方向ブレイク\n"
+            "・反応薄 → 高値圏調整\n"
         )
     else:
         return (
             "【実際の値動き】\n"
-            "・出来高を伴うブレイクの有無を確認\n\n"
+            "・出来高を伴うブレイクの有無\n"
+            "・前日高値／安値の攻防\n\n"
             "【半導体の反応】\n"
-            "・NVDAが指数を上回れば材料集中\n\n"
+            "・NVDAが指数を上回ったか\n"
+            "・SOXがトレンド維持できたか\n\n"
             "【検証】\n"
-            "・ニュースが効いたか／織り込み済みかを判定\n"
+            "・効いたニュース（★）と効かなかった材料を整理\n"
         )
 
 # =====================
-# メッセージ
+# メッセージ生成
 # =====================
 title = (
     "【米国株 市場シナリオ】18:00 JST"
@@ -129,8 +172,7 @@ message = (
     f"{title}\n"
     "（米国株 / 半導体中心）\n"
     "━━━━━━━━━━━━━━━━━━\n\n"
-    "【ニュース】\n"
-    f"{build_news_section()}\n\n"
+    f"{build_news_sections()}\n"
     f"{technical_section()}\n"
     "━━━━━━━━━━━━━━━━━━\n"
     f"配信時刻：{now_jst.strftime('%Y-%m-%d %H:%M JST')}\n"
