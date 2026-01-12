@@ -1,190 +1,172 @@
-import os
-import sys
-import requests
+# us_market_brief.py
+import os, requests, pytz, yfinance as yf, pandas as pd
 from datetime import datetime, timedelta
-from deep_translator import GoogleTranslator
+import openai
+import matplotlib.pyplot as plt
 
 # =====================
-# 環境変数
+# ENV
 # =====================
-WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+if not all([DISCORD_WEBHOOK_URL, OPENAI_API_KEY, NEWS_API_KEY]):
+    raise RuntimeError("Environment variables not set")
 
-if not WEBHOOK_URL or not NEWS_API_KEY:
-    sys.exit("ERROR: Environment variables not set")
+openai.api_key = OPENAI_API_KEY
+JST = pytz.timezone("Asia/Tokyo")
+now = datetime.now(JST)
 
 # =====================
-# 時刻（JST基準）
+# MODE（完全分離）
 # =====================
-now_utc = datetime.utcnow()
-now_jst = now_utc + timedelta(hours=9)
-weekday = now_jst.weekday()  # 月=0 土=5 日=6
-
-# 土曜はスキップ
-if weekday == 5:
-    sys.exit("Saturday skipped")
-
-# MODE判定（JST）
-if 17 <= now_jst.hour < 23:
-    MODE = "SCENARIO"   # 18:00想定
+if now.hour == 18:
+    mode = "scenario"
+elif now.hour == 6:
+    mode = "review"
 else:
-    MODE = "REVIEW"     # 6:00振り返り
-
-translator = GoogleTranslator(source="en", target="ja")
+    mode = "manual"
 
 # =====================
-# NewsAPI
+# AI CALL
 # =====================
-def fetch_news(query, start, end, size):
-    url = "https://newsapi.org/v2/everything"
-    params = {
-        "q": query,
-        "language": "en",
-        "sortBy": "publishedAt",
-        "from": start,
-        "to": end,
-        "pageSize": size,
-        "apiKey": NEWS_API_KEY,
+def ai_call(system, user, temp=0.3):
+    r = openai.ChatCompletion.create(
+        model="gpt-4o-mini",
+        messages=[{"role":"system","content":system},{"role":"user","content":user}],
+        temperature=temp
+    )
+    return r.choices[0].message.content.strip()
+
+NEWS_SYS = "ニュースを★△×で影響度評価し、日本語で内容中心に要約。"
+TECH_SYS = "出来高・ブレイク・調整・相対強弱でテクニカル解釈。"
+NVDA_SCN_SYS = "NVDAの翌セッション・テクニカルシナリオ（上/下/横）。"
+VERIFY_SYS = "18:00シナリオと実際の値動きを比較し理由を整理。"
+
+# =====================
+# MARKET DATA
+# =====================
+def get_data(t):
+    df = yf.download(t, period="2mo", interval="1d", progress=False).dropna()
+    cur, prev = df.iloc[-1], df.iloc[-2]
+    return {
+        "close": round(cur["Close"],2),
+        "chg": round((cur["Close"]-prev["Close"])/prev["Close"]*100,2),
+        "vol": int(cur["Volume"]),
+        "vol20": int(df["Volume"].tail(20).mean()),
+        "high": float(cur["High"]),
+        "low": float(cur["Low"]),
+        "ph": float(prev["High"]),
+        "pl": float(prev["Low"]),
+        "df": df
     }
-    res = requests.get(url, params=params).json()
-    return res.get("articles", [])
 
-def fmt(article, mark):
-    title = translator.translate(article.get("title", ""))
-    desc = translator.translate(article.get("description", ""))
-    dt = datetime.fromisoformat(article["publishedAt"].replace("Z", "")) + timedelta(hours=9)
-    return f"{mark}【{dt:%Y/%m/%d %H:%M JST}】{title}\n{desc}\n"
+def tech_flags(d):
+    return {
+        "vol_spike": d["vol"] > d["vol20"]*1.5,
+        "break_up": d["high"] > d["ph"],
+        "break_dn": d["low"] < d["pl"]
+    }
 
-# =====================
-# ニュース構築
-# =====================
-def build_news_blocks():
-    blocks = []
-
-    # --- 前日の影響評価 ---
-    days = 3 if weekday == 0 else 1
-    impact = fetch_news(
-        "US stock market reaction Fed earnings semiconductor",
-        (now_utc - timedelta(days=days)).strftime("%Y-%m-%d"),
-        now_utc.strftime("%Y-%m-%d"),
-        5,
-    )
-    text = "【ニュース｜前日の影響評価】\n"
-    if impact:
-        for a in impact:
-            text += fmt(a, "★")
-            text += "▶ 株価・出来高・指数への影響を検証\n\n"
-    else:
-        text += "※ 株価に直接影響した明確な材料は限定的\n\n"
-    blocks.append(text)
-
-    # --- 最新ニュース ---
-    latest = fetch_news(
-        "Fed comments US politics semiconductor NVDA",
-        (now_utc - timedelta(hours=12)).strftime("%Y-%m-%dT%H:%M:%S"),
-        now_utc.strftime("%Y-%m-%dT%H:%M:%S"),
-        3,
-    )
-    text = "【ニュース｜最新（速報）】\n"
-    if latest:
-        for a in latest:
-            text += fmt(a, "・")
-            text += "▶ 市場反応はこれから\n\n"
-    else:
-        text += "※ 目立った速報ニュースなし\n\n"
-    blocks.append(text)
-
-    # --- トレンド（1週間） ---
-    trend = fetch_news(
-        "Federal Reserve policy NVDA semiconductor geopolitics",
-        (now_utc - timedelta(days=7)).strftime("%Y-%m-%d"),
-        now_utc.strftime("%Y-%m-%d"),
-        3,
-    )
-    text = "【トレンドを形成している大きな材料（過去1週間）】\n"
-    if trend:
-        for a in trend:
-            text += fmt(a, "◆")
-            text += "▶ 中期トレンドを形成\n\n"
-    else:
-        text += "※ トレンドはテクニカル主導\n\n"
-    blocks.append(text)
-
-    return "\n".join(blocks)
+def rel_strength(a,b):
+    return "アウトパフォーム" if a["chg"]>b["chg"] else "アンダーパフォーム" if a["chg"]<b["chg"] else "指数並み"
 
 # =====================
-# NVDA別枠（時間帯別）
+# NEWS
 # =====================
-def nvda_section():
-    if MODE == "SCENARIO":
-        return (
-            "【NVDA 個別動向｜テクニカル予想】\n"
-            "・高値圏での推移が続く場合、押し目買い優勢\n"
-            "・出来高を伴い前日高値を上抜ければ上昇継続\n"
-            "・VWAP割れが続く場合は短期調整シナリオ\n\n"
-        )
-    else:
-        return (
-            "【NVDA 個別動向｜前日の振り返り】\n"
-            "・出来高の増減と価格の方向性を確認\n"
-            "・高値更新／失速の有無でトレンド評価\n"
-            "・指数（NASDAQ）との相対強弱を検証\n\n"
-        )
+def fetch_news(days):
+    url="https://newsapi.org/v2/everything"
+    params={
+        "q":"(Nvidia OR NVDA OR semiconductor) OR (US politics OR Fed)",
+        "from":(datetime.utcnow()-timedelta(days=days)).strftime("%Y-%m-%d"),
+        "language":"en","pageSize":10,"apiKey":NEWS_API_KEY
+    }
+    return requests.get(url,params=params,timeout=20).json().get("articles",[])
+
+def titles(arts):
+    return "\n".join([f"- {a['title']} ({a['source']['name']})" for a in arts]) or "該当なし"
+
+news_1d = titles(fetch_news(1))
+news_7d = titles(fetch_news(7))
 
 # =====================
-# 政治枠
+# FETCH
 # =====================
-def politics_section():
-    return (
-        "【米国政治・政治家発言】\n"
-        "・FRB関係者のスタンス（タカ派／ハト派）\n"
-        "・半導体規制・対中政策の方向性\n"
-        "・即効性か背景要因かを切り分け\n\n"
-    )
+nas = get_data("^IXIC")
+sox = get_data("^SOX")
+nvda = get_data("NVDA")
+
+nas_f, sox_f, nv_f = tech_flags(nas), tech_flags(sox), tech_flags(nvda)
+
+nv_fact = f"""
+終値 {nvda['close']}（{nvda['chg']}%）
+出来高 {'増加' if nv_f['vol_spike'] else '平常'}
+値動き {'高値ブレイク' if nv_f['break_up'] else 'レンジ/調整'}
+相対強弱 {rel_strength(nvda,nas)}
+"""
 
 # =====================
-# テクニカル
+# AI
 # =====================
-def technical_section():
-    if MODE == "SCENARIO":
-        return (
-            "【本日のテクニカルシナリオ】\n"
-            "・NVDA主導でSOXが上抜け → 強気\n"
-            "・指数失速でも半導体が耐えれば継続\n"
-            "・出来高を伴う下抜け → 調整警戒\n"
-        )
-    else:
-        return (
-            "【実際の値動き】\n"
-            "・出来高を伴うブレイクの有無\n"
-            "・前日高値／安値の攻防\n\n"
-            "【半導体の反応】\n"
-            "・NVDAが指数を上回ったか\n"
-            "・SOXがトレンド維持できたか\n\n"
-            "【検証】\n"
-            "・効いたニュース（★）と効かなかった材料を整理\n"
-        )
+news_eval = ai_call(NEWS_SYS, news_1d)
+trend_eval = ai_call(NEWS_SYS, news_7d)
+market_eval = ai_call(TECH_SYS, f"NASDAQ:{nas}\nSOX:{sox}")
+
+if mode=="scenario":
+    nv_block = ai_call(NVDA_SCN_SYS, nv_fact)
+    verify_block = "※ 翌朝6:00に検証"
+else:
+    nv_block = nv_fact
+    verify_block = ai_call(VERIFY_SYS, nv_fact)
 
 # =====================
-# メッセージ生成
+# OPTIONAL: 可視化（NVDA）
 # =====================
-title = "【米国株 市場シナリオ】18:00 JST" if MODE == "SCENARIO" else "【米国株 市場レビュー】6:00 JST"
-
-message = (
-    "━━━━━━━━━━━━━━━━━━\n"
-    f"{title}\n"
-    "（米国株 / 半導体中心）\n"
-    "━━━━━━━━━━━━━━━━━━\n\n"
-    f"{build_news_blocks()}\n"
-    f"{nvda_section()}"
-    f"{politics_section()}"
-    f"{technical_section()}\n"
-    "━━━━━━━━━━━━━━━━━━\n"
-    f"配信時刻：{now_jst:%Y-%m-%d %H:%M JST}\n"
-    "※ 自動生成 / 投資助言ではありません"
-)
+plt.figure()
+nvda["df"]["Close"].tail(30).plot(title="NVDA Close (30D)")
+img="nvda.png"
+plt.savefig(img); plt.close()
 
 # =====================
-# Discord送信
+# JOURNAL（簡易保存）
 # =====================
-requests.post(WEBHOOK_URL, json={"content": message})
+with open("journal.txt","a",encoding="utf-8") as f:
+    f.write(f"{now.isoformat()} {mode} NVDA {nvda['chg']}%\n")
+
+# =====================
+# MESSAGE
+# =====================
+title = "【米国株 シナリオ】18:00 JST" if mode=="scenario" else "【米国株 市場レビュー】6:00 JST"
+msg=f"""
+━━━━━━━━━━━━━━━━━━
+{title}
+（米国株 / 半導体中心）
+━━━━━━━━━━━━━━━━━━
+
+【ニュース｜前日の影響評価】
+{news_eval}
+
+【ニュース｜最新（速報）】
+{news_1d}
+
+【トレンドを形成している材料（過去1週間）】
+{trend_eval}
+
+【NVDA 個別動向】
+{nv_block}
+
+【米国政治・政治家発言】
+※ 半導体・金利への影響有無を精査
+
+【実際の値動き（テクニカル）】
+{market_eval}
+
+【検証】
+{verify_block}
+
+━━━━━━━━━━━━━━━━━━
+配信時刻：{now.strftime("%Y-%m-%d %H:%M")} JST
+※ 自動生成 / 投資助言ではありません
+"""
+
+requests.post(DISCORD_WEBHOOK_URL, json={"content": msg})
