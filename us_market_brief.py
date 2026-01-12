@@ -14,38 +14,59 @@ if not WEBHOOK_URL or not NEWS_API_KEY:
     sys.exit("ERROR: Environment variables not set")
 
 # =====================
-# 時刻判定（JST）
+# 時刻（UTC / JST）
 # =====================
 now_utc = datetime.utcnow()
 now_jst = now_utc + timedelta(hours=9)
-hour = now_jst.hour
-
-MODE = "SCENARIO" if hour >= 17 else "REVIEW"
 
 # =====================
-# ニュース取得
+# モード判定（UTC基準で確定）
 # =====================
-def fetch_news(query):
+# 09:00 UTC → 18:00 JST → SCENARIO
+# 21:00 UTC → 06:00 JST → REVIEW
+if now_utc.hour == 9:
+    MODE = "SCENARIO"
+elif now_utc.hour == 21:
+    MODE = "REVIEW"
+else:
+    MODE = "REVIEW"  # 手動実行用
+
+# =====================
+# ニュース取得（期間指定あり）
+# =====================
+def fetch_news():
     url = "https://newsapi.org/v2/everything"
+
+    if MODE == "REVIEW":
+        from_date = (now_utc - timedelta(days=1)).strftime("%Y-%m-%d")
+        to_date = now_utc.strftime("%Y-%m-%d")
+    else:
+        from_date = (now_utc - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
+        to_date = now_utc.strftime("%Y-%m-%dT%H:%M:%S")
+
     params = {
-        "q": query,
+        "q": "US stock market semiconductor NVDA AMD Federal Reserve politics",
         "language": "en",
         "sortBy": "publishedAt",
+        "from": from_date,
+        "to": to_date,
         "pageSize": 5,
         "apiKey": NEWS_API_KEY,
     }
+
     res = requests.get(url, params=params).json()
     return res.get("articles", [])
 
 translator = GoogleTranslator(source="en", target="ja")
 
 # =====================
-# ニュース処理
+# ニュース整形
 # =====================
 def build_news_section():
-    articles = fetch_news(
-        "US stock market semiconductor NVDA AMD Federal Reserve politics"
-    )
+    articles = fetch_news()
+
+    if not articles:
+        return "※ 対象期間内の新規ニュースは限定的\n"
 
     blocks = []
 
@@ -54,60 +75,48 @@ def build_news_section():
         desc = translator.translate(a.get("description", ""))
 
         published = a.get("publishedAt")
-        if published:
-            dt = datetime.fromisoformat(published.replace("Z", "")) + timedelta(hours=9)
-            date_str = dt.strftime("%Y/%m/%d %H:%M JST")
-        else:
-            date_str = "日時不明"
+        dt = datetime.fromisoformat(published.replace("Z", "")) + timedelta(hours=9)
+        date_str = dt.strftime("%Y/%m/%d %H:%M JST")
 
-        if MODE == "SCENARIO":
-            block = (
-                f"・【{date_str}】{title}\n"
-                f"{desc}\n"
-                "▶ 市場では金利・ハイテク株への影響が意識される可能性\n"
-            )
-        else:
-            block = (
-                f"★【{date_str}】{title}\n"
-                f"{desc}\n"
-                "▶ 出来高と価格帯の反応を踏まえ、影響度を判定\n"
-            )
+        mark = "★" if MODE == "REVIEW" else "・"
 
+        block = (
+            f"{mark}【{date_str}】{title}\n"
+            f"{desc}\n"
+        )
         blocks.append(block)
 
     return "\n".join(blocks)
 
 # =====================
-# テクニカル分析（文章）
+# テクニカル文章
 # =====================
 def technical_section():
     if MODE == "SCENARIO":
         return (
             "【テクニカル状況】\n"
-            "・NASDAQは20EMA上で推移\n"
-            "・高値圏での持ち合いが継続\n"
-            "・出来高は低下傾向で材料待ち\n\n"
+            "・NASDAQは20EMA上を維持\n"
+            "・高値圏での持ち合い\n"
+            "・出来高は低下し材料待ち\n\n"
             "【半導体】\n"
-            "・SOX指数はNASDAQより相対的に強い\n"
-            "・NVDAは押し目形成、AMDも下値は限定的\n\n"
-            "【本日のシナリオ】\n"
-            "・材料が意識され出来高増 → 上方向ブレイク\n"
-            "・反応薄 → 高値圏での調整継続\n"
+            "・SOX指数はNASDAQより強含み\n"
+            "・NVDAは押し目形成\n\n"
+            "【想定シナリオ】\n"
+            "・材料＋出来高 → 上放れ\n"
+            "・反応薄 → 調整継続\n"
         )
     else:
         return (
             "【実際の値動き】\n"
-            "・NASDAQは寄り付き後の値動きが焦点\n"
-            "・出来高を伴うブレイクがあったかを確認\n\n"
+            "・出来高を伴うブレイクの有無を確認\n\n"
             "【半導体の反応】\n"
-            "・NVDAが指数より強ければ材料集中と判断\n"
-            "・SOXが失速した場合は調整局面と評価\n\n"
+            "・NVDAが指数を上回れば材料集中\n\n"
             "【検証】\n"
-            "・ニュースが効いたか／織り込み済みだったかを判定\n"
+            "・ニュースが効いたか／織り込み済みかを判定\n"
         )
 
 # =====================
-# メッセージ構築
+# メッセージ
 # =====================
 title = (
     "【米国株 市場シナリオ】18:00 JST"
