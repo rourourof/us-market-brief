@@ -1,25 +1,20 @@
-name: US Market AI Brief
+mode: auto   # auto / morning / evening
 
-on:
-  schedule:
-    - cron: "0 9 * * 1-5"    # 18:00 JST
-    - cron: "0 21 * * 1-5"   # 6:00 JST
-  workflow_dispatch:
+discord:
+  webhook_url: "YOUR_DISCORD_WEBHOOK_URL"
 
-jobs:
-  run:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+openai:
+  enabled: true
+  model: "gpt-4o-mini"
+  temperature: 0.4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+symbols:
+  nvda: "NVDA"
+  semiconductor_index: "^SOX"
+  nasdaq: "^IXIC"
 
-      - run: pip install yfinance pandas requests openai
+schedule:
+  morning_hour: 6
+  evening_hour: 18
 
-      - name: Run AI market brief
-        run: python us_market_brief.py
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+timezone: "Asia/Tokyo"
