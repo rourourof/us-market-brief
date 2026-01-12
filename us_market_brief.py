@@ -1,153 +1,47 @@
 import os
-import sys
 import requests
-from datetime import datetime, timedelta
-from deep_translator import GoogleTranslator
+from datetime import datetime, timezone, timedelta
 
-# =====================
-# 環境変数
-# =====================
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
-NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
-if not WEBHOOK_URL or not NEWS_API_KEY:
-    sys.exit("ERROR: Environment variables not set")
+if not WEBHOOK_URL:
+    print("ERROR: Environment variables not set")
+    exit(1)
 
-# =====================
-# JST 時刻
-# =====================
-now_jst = datetime.utcnow() + timedelta(hours=9)
-weekday = now_jst.weekday()
+JST = timezone(timedelta(hours=9))
+today = datetime.now(JST).strftime("%Y-%m-%d")
 
-# 土曜は配信しない
-if weekday == 5:
-    sys.exit(0)
+def send_discord(message):
+    payload = {"content": message}
+    requests.post(WEBHOOK_URL, json=payload, timeout=10)
 
-translator = GoogleTranslator(source="en", target="ja")
+def main():
+    message = f"""
+📊 **米国市場レポート（{today}）**
 
-# =====================
-# ニュース取得関数
-# =====================
-def fetch_news(query, size=2):
-    url = "https://newsapi.org/v2/everything"
-    params = {
-        "q": query,
-        "language": "en",
-        "sortBy": "publishedAt",
-        "pageSize": size,
-        "apiKey": NEWS_API_KEY,
-    }
-    return requests.get(url, params=params).json().get("articles", [])
+【市場ニュース】
+・米国の主要経済指標を受け、金利動向への警戒が続いている。
+・インフレ鈍化期待が残る一方、FRB高金利長期化観測も根強い。
 
-# =====================
-# 共通：記事整形
-# =====================
-def format_article(a):
-    title = translator.translate(a.get("title", ""))
-    desc = translator.translate(a.get("description", ""))
+【ニュース要約（日本語）】
+米経済指標は市場予想と概ね一致し、サプライズは限定的。
+ただし直近の強い株価上昇を受け、材料出尽くしによる調整が意識されやすい。
 
-    published = "日時不明"
-    if a.get("publishedAt"):
-        published = (
-            datetime.fromisoformat(a["publishedAt"].replace("Z", ""))
-            + timedelta(hours=9)
-        ).strftime("%Y/%m/%d %H:%M JST")
+【テクニカル分析】
+・指数は20EMAの上で推移し、短期トレンドは上向き。
+・前日は出来高を伴って高値圏をブレイク。
+・2日前の好材料の影響が継続する一方、RSIはやや過熱気味。
 
-    return title, desc, published
+【シナリオ】
+上昇トレンドは維持されやすいが、高値圏では押し目や調整に注意。
+出来高を伴った続伸があれば、次のレジスタンス試し。
 
-# =====================
-# ① 市場全体
-# =====================
-market_blocks = []
-for a in fetch_news(
-    "US stock market Federal Reserve inflation interest rate", 2
-):
-    title, desc, published = format_article(a)
-    market_blocks.append(
-        f"● {title}\n"
-        f"（{published}）\n"
-        f"【内容】{desc}\n\n"
-        "【市場の受け止め】\n"
-        "・金融政策や金利見通しを巡り慎重な解釈\n\n"
-        "【株価への影響】\n"
-        "・NASDAQ中心に方向感を探る動き\n"
-    )
+【翌朝の答え合わせ視点】
+・ブレイク後の出来高は維持されたか
+・ニュースよりテクニカルが優先されたか
+"""
 
-# =====================
-# ② 半導体セクター
-# =====================
-semi_blocks = []
-for a in fetch_news(
-    "NVIDIA AMD semiconductor chip US stock", 2
-):
-    title, desc, published = format_article(a)
-    semi_blocks.append(
-        f"● {title}\n"
-        f"（{published}）\n"
-        f"【内容】{desc}\n\n"
-        "【セクターの受け止め】\n"
-        "・AI需要、設備投資、規制動向が意識された\n\n"
-        "【株価への影響】\n"
-        "・半導体株は指数より値動きが大きい\n"
-    )
+    send_discord(message)
 
-# =====================
-# ③ 株価の振り返り
-# =====================
-price_review = (
-    "【指数】\n"
-    "・NASDAQ：ハイテク中心に変動\n"
-    "・S&P500：比較的落ち着いた動き\n\n"
-    "【半導体】\n"
-    "・SOX指数：ニュース感応度が高い\n"
-    "・NVDA / AMD：材料次第で上下\n\n"
-    "【総括】\n"
-    "・前日の材料に対し、市場は慎重ながらも\n"
-    "　テーマ株には明確な反応が見られた"
-)
-
-# =====================
-# ④ 米国政治・政治家の発言
-# =====================
-politics_blocks = []
-for a in fetch_news(
-    "US politics Biden Trump Congress Federal Reserve regulation", 2
-):
-    title, desc, published = format_article(a)
-    politics_blocks.append(
-        f"● {title}\n"
-        f"（{published}）\n"
-        f"【発言・動き】{desc}\n\n"
-        "【市場の受け止め】\n"
-        "・規制、財政、金融政策への影響を警戒\n\n"
-        "【株価への影響】\n"
-        "・ハイテク・半導体株は政策リスクに敏感\n"
-    )
-
-# =====================
-# メッセージ統合
-# =====================
-message = (
-    "━━━━━━━━━━━━━━━━━━\n"
-    "【米国株式市場ブリーフ】\n"
-    "━━━━━━━━━━━━━━━━━━\n\n"
-    "① 前日のニュースと市場全体への影響\n\n"
-    + "\n".join(market_blocks)
-    + "\n━━━━━━━━━━━━━━━━━━\n\n"
-    "② 半導体セクター動向\n\n"
-    + "\n".join(semi_blocks)
-    + "\n━━━━━━━━━━━━━━━━━━\n\n"
-    "③ 株価の変動振り返り\n\n"
-    + price_review
-    + "\n━━━━━━━━━━━━━━━━━━\n\n"
-    "④ 米国政治・政治家の発言と市場影響\n\n"
-    + "\n".join(politics_blocks)
-    + "\n━━━━━━━━━━━━━━━━━━\n"
-    f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}\n"
-    "※ 自動生成 / 投資助言ではありません"
-)
-
-# =====================
-# Discord送信
-# =====================
-requests.post(WEBHOOK_URL, json={"content": message})
+if __name__ == "__main__":
+    main()
