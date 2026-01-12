@@ -14,12 +14,12 @@ if not WEBHOOK_URL or not NEWS_API_KEY:
     sys.exit("ERROR: Environment variables not set")
 
 # =====================
-# 時刻（JST）
+# JST 時刻
 # =====================
 now_jst = datetime.utcnow() + timedelta(hours=9)
 
 # =====================
-# ニュース取得（本文あり）
+# ニュース取得
 # =====================
 def fetch_news():
     url = "https://newsapi.org/v2/everything"
@@ -37,18 +37,31 @@ translator = GoogleTranslator(source="en", target="ja")
 news_blocks = []
 
 for a in fetch_news():
-    title = translator.translate(a.get("title", ""))
-    description = translator.translate(a.get("description", ""))
+    # タイトル・内容
+    title_ja = translator.translate(a.get("title", ""))
+    desc_ja = translator.translate(a.get("description", ""))
+
+    # 投稿日時（UTC → JST）
+    published_utc = a.get("publishedAt")
+    if published_utc:
+        published_dt = datetime.fromisoformat(
+            published_utc.replace("Z", "")
+        ) + timedelta(hours=9)
+        published_str = published_dt.strftime("%Y/%m/%d %H:%M JST")
+    else:
+        published_str = "日時不明"
 
     block = (
-        f"● {title}\n"
-        f"【内容】{description}\n"
+        f"● {title_ja}\n"
+        f"（{published_str}）\n"
+        f"【内容】\n{desc_ja}\n\n"
         "【市場の受け止め】\n"
         "・金利や金融政策への連想が意識されやすい材料\n"
-        "・ハイテク・成長株は反応しやすい\n"
+        "・ハイテク・成長株が反応しやすい\n\n"
         "【株価への影響】\n"
-        "・NASDAQ中心に方向感が出やすい展開\n"
+        "・NASDAQ中心に値動きが出やすい展開\n"
     )
+
     news_blocks.append(block)
 
 # =====================
@@ -61,7 +74,8 @@ message = (
     "━━━━━━━━━━━━━━━━━━\n\n"
     + "\n".join(news_blocks) +
     "\n━━━━━━━━━━━━━━━━━━\n"
-    f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}"
+    f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}\n"
+    "※ 自動生成 / 投資助言ではありません"
 )
 
 # =====================
