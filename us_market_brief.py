@@ -18,62 +18,97 @@ if not WEBHOOK_URL or not NEWS_API_KEY:
 # =====================
 now_jst = datetime.utcnow() + timedelta(hours=9)
 
+translator = GoogleTranslator(source="en", target="ja")
+
 # =====================
-# ニュース取得
+# ニュース取得 共通関数
 # =====================
-def fetch_news():
+def fetch_news(query, size=3):
     url = "https://newsapi.org/v2/everything"
     params = {
-        "q": "US stock market Federal Reserve inflation interest rate",
+        "q": query,
         "language": "en",
         "sortBy": "publishedAt",
-        "pageSize": 3,
+        "pageSize": size,
         "apiKey": NEWS_API_KEY,
     }
     return requests.get(url, params=params).json().get("articles", [])
 
-translator = GoogleTranslator(source="en", target="ja")
+# =====================
+# ① 市場全体ニュース
+# =====================
+market_blocks = []
 
-news_blocks = []
+for a in fetch_news(
+    "US stock market Federal Reserve inflation interest rate", 3
+):
+    title = translator.translate(a.get("title", ""))
+    desc = translator.translate(a.get("description", ""))
 
-for a in fetch_news():
-    # タイトル・内容
-    title_ja = translator.translate(a.get("title", ""))
-    desc_ja = translator.translate(a.get("description", ""))
-
-    # 投稿日時（UTC → JST）
     published_utc = a.get("publishedAt")
     if published_utc:
-        published_dt = datetime.fromisoformat(
-            published_utc.replace("Z", "")
-        ) + timedelta(hours=9)
-        published_str = published_dt.strftime("%Y/%m/%d %H:%M JST")
+        published = (
+            datetime.fromisoformat(published_utc.replace("Z", ""))
+            + timedelta(hours=9)
+        ).strftime("%Y/%m/%d %H:%M JST")
     else:
-        published_str = "日時不明"
+        published = "日時不明"
 
-    block = (
-        f"● {title_ja}\n"
-        f"（{published_str}）\n"
-        f"【内容】\n{desc_ja}\n\n"
+    market_blocks.append(
+        f"● {title}\n"
+        f"（{published}）\n"
+        f"【内容】{desc}\n\n"
         "【市場の受け止め】\n"
-        "・金利や金融政策への連想が意識されやすい材料\n"
-        "・ハイテク・成長株が反応しやすい\n\n"
+        "・金融政策や金利見通しへの連想が意識された\n\n"
         "【株価への影響】\n"
-        "・NASDAQ中心に値動きが出やすい展開\n"
+        "・NASDAQを中心に方向感が出やすい一日\n"
     )
 
-    news_blocks.append(block)
+# =====================
+# ② 半導体セクター
+# =====================
+semi_blocks = []
+
+for a in fetch_news(
+    "NVIDIA AMD semiconductor chip US stock", 3
+):
+    title = translator.translate(a.get("title", ""))
+    desc = translator.translate(a.get("description", ""))
+
+    published_utc = a.get("publishedAt")
+    if published_utc:
+        published = (
+            datetime.fromisoformat(published_utc.replace("Z", ""))
+            + timedelta(hours=9)
+        ).strftime("%Y/%m/%d %H:%M JST")
+    else:
+        published = "日時不明"
+
+    semi_blocks.append(
+        f"● {title}\n"
+        f"（{published}）\n"
+        f"【内容】{desc}\n\n"
+        "【セクターの受け止め】\n"
+        "・AI投資、設備投資、需給見通しが意識された\n"
+        "・NVDA、AMDなど主力株に連想が波及\n\n"
+        "【株価への影響】\n"
+        "・半導体株は指数より値動きが大きくなりやすい\n"
+        "・SOX指数はNASDAQの先行指標として注目\n"
+    )
 
 # =====================
-# メッセージ
+# メッセージ統合
 # =====================
 message = (
     "━━━━━━━━━━━━━━━━━━\n"
     "【米国株式市場ブリーフ】\n"
-    "① 前日のニュースと株価への影響\n"
     "━━━━━━━━━━━━━━━━━━\n\n"
-    + "\n".join(news_blocks) +
-    "\n━━━━━━━━━━━━━━━━━━\n"
+    "① 前日のニュースと市場全体への影響\n\n"
+    + "\n".join(market_blocks)
+    + "\n━━━━━━━━━━━━━━━━━━\n\n"
+    "② 半導体セクター動向\n\n"
+    + "\n".join(semi_blocks)
+    + "\n━━━━━━━━━━━━━━━━━━\n"
     f"配信時刻（JST）：{now_jst.strftime('%Y-%m-%d %H:%M')}\n"
     "※ 自動生成 / 投資助言ではありません"
 )
