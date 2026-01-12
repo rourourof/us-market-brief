@@ -6,42 +6,45 @@ import yfinance as yf
 from openai import OpenAI
 
 # =====================
-# 環境変数チェック
+# 環境変数
 # =====================
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-if not DISCORD_WEBHOOK_URL or not OPENAI_API_KEY:
-    raise RuntimeError("Environment variables not set")
+if not DISCORD_WEBHOOK_URL:
+    raise RuntimeError("DISCORD_WEBHOOK_URL not set")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # =====================
 # 時刻判定（JST）
 # =====================
 now_utc = datetime.utcnow()
 jst_hour = (now_utc.hour + 9) % 24
+weekday = now_utc.weekday()  # Mon=0
+
+if weekday >= 5:
+    exit()  # 土日除外
 
 MODE = "EVENING" if jst_hour >= 17 else "MORNING"
 
 # =====================
-# 株価データ取得
+# 株価取得（Warning回避）
 # =====================
 def fetch_market(ticker):
-    df = yf.download(ticker, period="40d", interval="1d", progress=False)
-    df = df.dropna()
+    df = yf.download(ticker, period="40d", interval="1d", progress=False).dropna()
 
     cur = df.iloc[-1]
     prev = df.iloc[-2]
 
     return {
-        "close": float(cur["Close"]),
-        "high": float(cur["High"]),
-        "low": float(cur["Low"]),
-        "prev_high": float(prev["High"]),
-        "prev_low": float(prev["Low"]),
-        "change_pct": float((cur["Close"] / prev["Close"] - 1) * 100),
-        "volume": int(cur["Volume"]),
+        "close": float(cur["Close"].item()),
+        "high": float(cur["High"].item()),
+        "low": float(cur["Low"].item()),
+        "prev_high": float(prev["High"].item()),
+        "prev_low": float(prev["Low"].item()),
+        "change_pct": float(((cur["Close"] / prev["Close"]) - 1).item() * 100),
+        "volume": int(cur["Volume"].item()),
         "avg_volume_20": int(df["Volume"].tail(20).mean())
     }
 
@@ -68,9 +71,12 @@ def relative_strength(a, b):
     return "指数並み"
 
 # =====================
-# OpenAI文章生成
+# AI生成（Quota切れ耐性）
 # =====================
 def ai_generate(prompt):
+    if not client:
+        raise RuntimeError("OpenAI client not available")
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -82,91 +88,95 @@ def ai_generate(prompt):
     return response.choices[0].message.content.strip()
 
 # =====================
-# NVDAシナリオ生成（18:00）
+# NVDAシナリオ（AI + fallback）
 # =====================
-def nvda_evening_scenario():
+def nvda_scenario():
+    base = (
+        f"終値 {nvda['close']:.2f} / 前日比 {nvda['change_pct']:.2f}%。\n"
+        f"{breakout_text(nvda)}。"
+    )
+
     prompt = f"""
 以下はNVIDIA（NVDA）の本日のテクニカル情報です。
-これを基に、短期トレード視点でのシナリオを日本語でまとめてください。
+短期視点のシナリオを日本語で2〜4文で。
 
-・終値: {nvda['close']}
-・前日高値: {nvda['prev_high']}
-・前日安値: {nvda['prev_low']}
-・前日比: {nvda['change_pct']:.2f}%
-・出来高: {nvda['volume']}（20日平均 {nvda['avg_volume_20']}）
-
-条件：
-・事実ベース
-・断定しすぎない
-・2〜4文程度
+{base}
 """
-    return ai_generate(prompt)
+
+    try:
+        return ai_generate(prompt)
+    except Exception:
+        # フォールバック（条件維持）
+        if nvda["close"] > nvda["prev_high"]:
+            return base + " 上方向へのトレンド継続が意識されやすい。"
+        if nvda["close"] < nvda["prev_low"]:
+            return base + " 調整色が強く、戻り売り警戒。"
+        return base + " 方向感待ちの調整局面。"
 
 # =====================
 # 予想保存・検証
 # =====================
 PRED_FILE = "nvda_prediction.json"
 
-def save_prediction(text):
-    with open(PRED_FILE, "w") as f:
-        json.dump({"prediction": text}, f, ensure_ascii=False)
+def save_pred(text):
+    with open(PRED_FILE, "w", encoding="utf-8") as f:
+        json.dump({"text": text}, f, ensure_ascii=False)
 
-def load_prediction():
+def load_pred():
     if not os.path.exists(PRED_FILE):
         return "前日シナリオなし"
-    with open(PRED_FILE) as f:
-        return json.load(f)["prediction"]
+    with open(PRED_FILE, encoding="utf-8") as f:
+        return json.load(f)["text"]
 
 # =====================
 # メッセージ生成
 # =====================
 def build_message():
     if MODE == "EVENING":
-        scenario = nvda_evening_scenario()
-        save_prediction(scenario)
+        scenario = nvda_scenario()
+        save_pred(scenario)
 
         return f"""
 ━━━━━━━━━━━━━━━━━━
 【18:00 NVIDIA テクニカルシナリオ】
 ━━━━━━━━━━━━━━━━━━
 
-【テクニカル状況】
-・終値: {nvda['close']}
-・前日比: {nvda['change_pct']:.2f}%
-・値動き: {breakout_text(nvda)}
+【NVDA】
+終値: {nvda['close']:.2f}
+前日比: {nvda['change_pct']:.2f}%
+値動き: {breakout_text(nvda)}
 
-【AIシナリオ】
+【シナリオ】
 {scenario}
 
-━━━━━━━━━━━━━━━━━━
 ※ 自動生成 / 投資助言ではありません
 """
 
     else:
-        prev_pred = load_prediction()
-
         return f"""
 ━━━━━━━━━━━━━━━━━━
 【米国株 市場レビュー】6:00 JST
 （米国株 / 半導体中心）
 ━━━━━━━━━━━━━━━━━━
 
-【指数の動き】
+【指数】
 NASDAQ: {breakout_text(nasdaq)}
 SOX: {breakout_text(sox)}
 
-【半導体の反応】
+【半導体】
 NVDA: NASDAQ比 {relative_strength(nvda, nasdaq)}
 
-【NVDA 前日シナリオ検証】
-{prev_pred}
+【前日18:00 NVDAシナリオ検証】
+{load_pred()}
 
-━━━━━━━━━━━━━━━━━━
 ※ 自動生成 / 投資助言ではありません
 """
 
 # =====================
 # Discord送信
 # =====================
-payload = {"content": build_message()}
-requests.post(DISCORD_WEBHOOK_URL, json=payload)
+requests.post(
+    DISCORD_WEBHOOK_URL,
+    json={"content": build_message()},
+    timeout=10
+)
